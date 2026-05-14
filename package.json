@@ -1,0 +1,26 @@
+{
+  "name": "terminal-chess-cli",
+  "version": "0.1.0",
+  "description": "Interactive local pass-and-play chess TUI for the terminal.",
+  "type": "module",
+  "bin": {
+    "chess-cli": "./dist/main.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/main.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "chess.js": "^1.4.0",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
