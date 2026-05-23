@@ -16,17 +16,17 @@ Interactive local pass-and-play chess for the terminal, built from `terminal_che
 Install from npm:
 
 ```bash
-npm install -g terminal-chess-cli
+npm install -g @gtryp/chess-cli
 chess-cli
 ```
 
 Run without installing:
 
 ```bash
-npx terminal-chess-cli
+npx @gtryp/chess-cli
 ```
 
-The npm package is `terminal-chess-cli` because the unscoped `chess-cli` package name is already taken on npm. The installed command is still `chess-cli`.
+The npm package is `@gtryp/chess-cli` because the unscoped `chess-cli` package name is already taken on npm. The installed command is still `chess-cli`.
 
 Local development:
 

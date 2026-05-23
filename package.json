@@ -1,5 +1,5 @@
 {
-  "name": "terminal-chess-cli",
+  "name": "@gtryp/chess-cli",
   "version": "0.1.0",
   "description": "Interactive local pass-and-play chess TUI for the terminal.",
   "type": "module",
