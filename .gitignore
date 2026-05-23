@@ -3,5 +3,6 @@ dist/
 .tools/
 .gitconfig-gh
 coverage/
+.idea/
 .env
 *.log

@@ -41,7 +41,7 @@ export class LayoutRenderer {
       lines.push(`${prefix}${leftChar}${box.h.repeat(INNER_WIDTH)}${rightChar}`);
     };
     const pushContent = (raw: string, visibleWidth = raw.length) => {
-      const truncated = truncateText(raw, INNER_WIDTH);
+      const truncated = visibleWidth > INNER_WIDTH ? truncateText(raw, INNER_WIDTH) : raw;
       const truncatedVisibleWidth = Math.min(visibleWidth, INNER_WIDTH);
       lines.push(`${prefix}${box.v}${truncated}${" ".repeat(Math.max(0, INNER_WIDTH - truncatedVisibleWidth))}${box.v}`);
     };
