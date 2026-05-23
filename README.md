@@ -13,16 +13,41 @@ Interactive local pass-and-play chess for the terminal, built from `terminal_che
 
 ## Usage
 
+Install from npm:
+
+```bash
+npm install -g terminal-chess-cli
+chess-cli
+```
+
+Run without installing:
+
+```bash
+npx terminal-chess-cli
+```
+
+The npm package is `terminal-chess-cli` because the unscoped `chess-cli` package name is already taken on npm. The installed command is still `chess-cli`.
+
+Local development:
+
 ```bash
 npm install
 npm run build
-npx chess-cli
+npm run dev
 ```
 
-Development mode:
+## Publishing
+
+The GitHub Actions workflow publishes new package versions from `main` when `package.json` contains a version that is not already on npm.
+
+Required repository secret:
+
+- `NPM_TOKEN`: npm automation token with publish access.
+
+Bump the version before merging to `main`:
 
 ```bash
-npm run dev
+npm version patch
 ```
 
 Command variants:

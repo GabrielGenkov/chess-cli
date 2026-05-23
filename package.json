@@ -3,12 +3,39 @@
   "version": "0.1.0",
   "description": "Interactive local pass-and-play chess TUI for the terminal.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GabrielGenkov/chess-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/GabrielGenkov/chess-cli/issues"
+  },
+  "homepage": "https://github.com/GabrielGenkov/chess-cli#readme",
+  "keywords": [
+    "chess",
+    "cli",
+    "terminal",
+    "tui",
+    "game"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "chess-cli": "./dist/main.js"
   },
   "scripts": {
     "build": "tsup",
+    "ci": "npm run typecheck && npm test && npm run build",
     "dev": "tsx src/main.ts",
+    "prepublishOnly": "npm run ci",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
