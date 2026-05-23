@@ -105,14 +105,14 @@ export class LayoutRenderer {
     const boardLayout = createBoardLayout(left, top, options.flipBoard, COMPACT_BOARD_GRID_TOP_OFFSET);
     const box = this.getBox(options.ascii);
     const prefix = " ".repeat(left - 1);
-    const title = "Terminal Chess";
+    const title = applyStyle("Terminal Chess", [ansi.bold, ansi.fgCyan], options.color);
     const boardLines = state.showHelp
       ? this.padRenderableLines(this.helpModal.render(), 20)
       : this.padRenderableLines(this.boardRenderer.render(chess, state, options, boardLayout).lines, 20);
     const sideLines = this.renderSidePanel(chess, state);
     const lines = [
       `${prefix}${box.tl}${box.h.repeat(innerWidth)}${box.tr}`,
-      this.renderBoxContent(prefix, box.v, title, title.length, innerWidth),
+      this.renderBoxContent(prefix, box.v, title, "Terminal Chess".length, innerWidth),
       `${prefix}${box.lt}${box.h.repeat(innerWidth)}${box.rt}`
     ];
 
@@ -139,13 +139,13 @@ export class LayoutRenderer {
     const boardLayout = createBoardLayout(left, top, options.flipBoard, COMPACT_BOARD_GRID_TOP_OFFSET);
     const box = this.getBox(options.ascii);
     const prefix = " ".repeat(left - 1);
-    const title = this.getCompactTitle(chess, state);
+    const title = this.getCompactTitle(chess, state, options, innerWidth);
     const contentLines = state.showHelp
       ? this.padRenderableLines(this.helpModal.render(), 20)
       : this.padRenderableLines(this.boardRenderer.render(chess, state, options, boardLayout).lines, 20);
     const lines = [
       `${prefix}${box.tl}${box.h.repeat(innerWidth)}${box.tr}`,
-      this.renderBoxContent(prefix, box.v, title, title.length, innerWidth),
+      this.renderBoxContent(prefix, box.v, title.raw, title.visibleWidth, innerWidth),
       `${prefix}${box.lt}${box.h.repeat(innerWidth)}${box.rt}`
     ];
 
@@ -190,11 +190,24 @@ export class LayoutRenderer {
     ];
   }
 
-  private getCompactTitle(chess: ChessService, state: UiState): string {
+  private getCompactTitle(
+    chess: ChessService,
+    state: UiState,
+    options: CliOptions,
+    innerWidth: number
+  ): { raw: string; visibleWidth: number } {
+    const appTitle = "Terminal Chess";
     const message = state.pendingPromotion
       ? "Promote q/r/b/n"
       : state.message ?? "Ready";
-    return `Terminal Chess | ${chess.getTurnLabel()} | ${chess.getStatusLabel()} | ${message} | Last: ${formatMove(state.lastMove)}`;
+    const suffix = ` | ${chess.getTurnLabel()} | ${chess.getStatusLabel()} | ${message} | Last: ${formatMove(state.lastMove)}`;
+    const suffixWidth = Math.max(0, innerWidth - appTitle.length);
+    const visibleSuffix = this.fitPlainText(suffix, suffixWidth);
+
+    return {
+      raw: `${applyStyle(appTitle, [ansi.bold, ansi.fgCyan], options.color)}${visibleSuffix}`,
+      visibleWidth: appTitle.length + visibleSuffix.length
+    };
   }
 
   private padRenderableLines(

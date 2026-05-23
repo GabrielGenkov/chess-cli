@@ -60,7 +60,10 @@ describe("LayoutRenderer styled output", () => {
     const rendered = withTerminalSize(66, 24, () => new LayoutRenderer().render(chess, state, options));
 
     expect(rendered.boardLayout).not.toBeNull();
-    expect(rendered.output).toContain("Terminal Chess | White");
+    expect(rendered.output).toContain(ansi.bold);
+    expect(rendered.output).toContain(ansi.fgCyan);
+    expect(rendered.output).toContain("Terminal Chess");
+    expect(rendered.output).toContain("| White");
     expect(rendered.output).toContain("┌─────┬─────");
   });
 
