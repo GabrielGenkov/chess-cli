@@ -1,8 +1,14 @@
 import { ChessService } from "../chess/ChessService.js";
+import { formatMove } from "../chess/MoveService.js";
 import type { CliOptions } from "../types/AppOptions.js";
 import type { UiState } from "../types/UiState.js";
 import { ansi, applyStyle, truncateText } from "./ansi.js";
-import { BoardRenderer, createBoardLayout, type BoardLayout } from "./BoardRenderer.js";
+import {
+  BOARD_VISIBLE_WIDTH,
+  BoardRenderer,
+  createBoardLayout,
+  type BoardLayout
+} from "./BoardRenderer.js";
 import { HelpModal } from "./HelpModal.js";
 import { StatusRenderer } from "./StatusRenderer.js";
 
@@ -11,9 +17,12 @@ export type RenderResult = {
   boardLayout: BoardLayout | null;
 };
 
-const WIDTH = 60;
-const HEIGHT = 24;
-const INNER_WIDTH = WIDTH - 2;
+const FULL_WIDTH = 80;
+const FULL_HEIGHT = 32;
+const SIDE_WIDTH = 100;
+const SHORT_HEIGHT = 24;
+const COMPACT_WIDTH = BOARD_VISIBLE_WIDTH + 2;
+const COMPACT_BOARD_GRID_TOP_OFFSET = 5;
 
 export class LayoutRenderer {
   private readonly boardRenderer = new BoardRenderer();
@@ -24,26 +33,38 @@ export class LayoutRenderer {
     const columns = process.stdout.columns ?? 80;
     const rows = process.stdout.rows ?? 24;
 
-    if (columns < WIDTH || rows < HEIGHT) {
-      return {
-        output: `${ansi.clear}${ansi.showCursor}Terminal too small. Minimum size: ${WIDTH}x${HEIGHT}.\n`,
-        boardLayout: null
-      };
+    if (columns >= FULL_WIDTH && rows >= FULL_HEIGHT) {
+      return this.renderFullLayout(chess, state, options, columns);
     }
 
-    const left = Math.max(1, Math.floor((columns - WIDTH) / 2) + 1);
+    if (columns >= SIDE_WIDTH && rows >= SHORT_HEIGHT) {
+      return this.renderSideLayout(chess, state, options, columns);
+    }
+
+    if (columns >= COMPACT_WIDTH && rows >= SHORT_HEIGHT) {
+      return this.renderCompactLayout(chess, state, options, columns);
+    }
+
+    return {
+      output: `${ansi.clear}${ansi.showCursor}Terminal too small. Minimum size: ${COMPACT_WIDTH}x${SHORT_HEIGHT}.\n`,
+      boardLayout: null
+    };
+  }
+
+  private renderFullLayout(chess: ChessService, state: UiState, options: CliOptions, columns: number): RenderResult {
+    const width = FULL_WIDTH;
+    const innerWidth = width - 2;
+    const left = Math.max(1, Math.floor((columns - width) / 2) + 1);
     const top = 1;
     const boardLayout = createBoardLayout(left, top, options.flipBoard);
     const box = this.getBox(options.ascii);
     const prefix = " ".repeat(left - 1);
     const lines: string[] = [];
     const pushRule = (leftChar: string, rightChar: string) => {
-      lines.push(`${prefix}${leftChar}${box.h.repeat(INNER_WIDTH)}${rightChar}`);
+      lines.push(`${prefix}${leftChar}${box.h.repeat(innerWidth)}${rightChar}`);
     };
     const pushContent = (raw: string, visibleWidth = raw.length) => {
-      const truncated = visibleWidth > INNER_WIDTH ? truncateText(raw, INNER_WIDTH) : raw;
-      const truncatedVisibleWidth = Math.min(visibleWidth, INNER_WIDTH);
-      lines.push(`${prefix}${box.v}${truncated}${" ".repeat(Math.max(0, INNER_WIDTH - truncatedVisibleWidth))}${box.v}`);
+      lines.push(this.renderBoxContent(prefix, box.v, raw, visibleWidth, innerWidth));
     };
 
     const title = applyStyle("Terminal Chess", [ansi.bold, ansi.fgCyan], options.color);
@@ -71,8 +92,126 @@ export class LayoutRenderer {
 
     return {
       output: `${ansi.clear}${ansi.hideCursor}${lines.join("\n")}`,
-      boardLayout
+      boardLayout: state.showHelp ? null : boardLayout
     };
+  }
+
+  private renderSideLayout(chess: ChessService, state: UiState, options: CliOptions, columns: number): RenderResult {
+    const width = SIDE_WIDTH;
+    const innerWidth = width - 2;
+    const sideWidth = innerWidth - BOARD_VISIBLE_WIDTH - 2;
+    const left = Math.max(1, Math.floor((columns - width) / 2) + 1);
+    const top = 1;
+    const boardLayout = createBoardLayout(left, top, options.flipBoard, COMPACT_BOARD_GRID_TOP_OFFSET);
+    const box = this.getBox(options.ascii);
+    const prefix = " ".repeat(left - 1);
+    const title = "Terminal Chess";
+    const boardLines = state.showHelp
+      ? this.padRenderableLines(this.helpModal.render(), 20)
+      : this.padRenderableLines(this.boardRenderer.render(chess, state, options, boardLayout).lines, 20);
+    const sideLines = this.renderSidePanel(chess, state);
+    const lines = [
+      `${prefix}${box.tl}${box.h.repeat(innerWidth)}${box.tr}`,
+      this.renderBoxContent(prefix, box.v, title, title.length, innerWidth),
+      `${prefix}${box.lt}${box.h.repeat(innerWidth)}${box.rt}`
+    ];
+
+    for (let index = 0; index < 20; index += 1) {
+      const boardLine = boardLines[index];
+      const sideText = this.fitPlainText(sideLines[index] ?? "", sideWidth);
+      const raw = `${boardLine.raw}${" ".repeat(Math.max(0, BOARD_VISIBLE_WIDTH - boardLine.visibleWidth))}  ${sideText}`;
+      lines.push(this.renderBoxContent(prefix, box.v, raw, BOARD_VISIBLE_WIDTH + 2 + sideText.length, innerWidth));
+    }
+
+    lines.push(`${prefix}${box.bl}${box.h.repeat(innerWidth)}${box.br}`);
+
+    return {
+      output: `${ansi.clear}${ansi.hideCursor}${lines.join("\n")}`,
+      boardLayout: state.showHelp ? null : boardLayout
+    };
+  }
+
+  private renderCompactLayout(chess: ChessService, state: UiState, options: CliOptions, columns: number): RenderResult {
+    const width = Math.min(FULL_WIDTH, Math.max(COMPACT_WIDTH, columns));
+    const innerWidth = width - 2;
+    const left = Math.max(1, Math.floor((columns - width) / 2) + 1);
+    const top = 1;
+    const boardLayout = createBoardLayout(left, top, options.flipBoard, COMPACT_BOARD_GRID_TOP_OFFSET);
+    const box = this.getBox(options.ascii);
+    const prefix = " ".repeat(left - 1);
+    const title = this.getCompactTitle(chess, state);
+    const contentLines = state.showHelp
+      ? this.padRenderableLines(this.helpModal.render(), 20)
+      : this.padRenderableLines(this.boardRenderer.render(chess, state, options, boardLayout).lines, 20);
+    const lines = [
+      `${prefix}${box.tl}${box.h.repeat(innerWidth)}${box.tr}`,
+      this.renderBoxContent(prefix, box.v, title, title.length, innerWidth),
+      `${prefix}${box.lt}${box.h.repeat(innerWidth)}${box.rt}`
+    ];
+
+    for (const line of contentLines) {
+      lines.push(this.renderBoxContent(prefix, box.v, line.raw, line.visibleWidth, innerWidth));
+    }
+
+    lines.push(`${prefix}${box.bl}${box.h.repeat(innerWidth)}${box.br}`);
+
+    return {
+      output: `${ansi.clear}${ansi.hideCursor}${lines.join("\n")}`,
+      boardLayout: state.showHelp ? null : boardLayout
+    };
+  }
+
+  private renderSidePanel(chess: ChessService, state: UiState): string[] {
+    const message = state.pendingPromotion
+      ? "Promote: q/r/b/n"
+      : `Msg: ${state.message ?? "Ready"}`;
+
+    return [
+      "Info",
+      "",
+      this.statusRenderer.renderTurn(chess),
+      this.statusRenderer.renderStatus(chess),
+      message,
+      "",
+      this.statusRenderer.renderLastMove(state),
+      this.statusRenderer.renderInput(state),
+      "",
+      "Commands",
+      "q quit",
+      "r restart",
+      "u undo",
+      "? or h help",
+      "Esc clear",
+      "",
+      "Mouse",
+      "Click piece",
+      "then target",
+      "Borders ignored"
+    ];
+  }
+
+  private getCompactTitle(chess: ChessService, state: UiState): string {
+    const message = state.pendingPromotion
+      ? "Promote q/r/b/n"
+      : state.message ?? "Ready";
+    return `Terminal Chess | ${chess.getTurnLabel()} | ${chess.getStatusLabel()} | ${message} | Last: ${formatMove(state.lastMove)}`;
+  }
+
+  private padRenderableLines(
+    lines: Array<{ raw: string; visibleWidth: number }>,
+    count: number
+  ): Array<{ raw: string; visibleWidth: number }> {
+    return Array.from({ length: count }, (_value, index) => lines[index] ?? { raw: "", visibleWidth: 0 });
+  }
+
+  private renderBoxContent(prefix: string, vertical: string, raw: string, visibleWidth: number, innerWidth: number): string {
+    const truncated = visibleWidth > innerWidth ? truncateText(raw, innerWidth) : raw;
+    const truncatedVisibleWidth = Math.min(visibleWidth, innerWidth);
+    return `${prefix}${vertical}${truncated}${" ".repeat(Math.max(0, innerWidth - truncatedVisibleWidth))}${vertical}`;
+  }
+
+  private fitPlainText(text: string, width: number): string {
+    return text.length > width ? truncateText(text, width) : text;
   }
 
   private getBox(ascii: boolean): {

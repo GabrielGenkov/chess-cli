@@ -1,6 +1,6 @@
 import type { Move } from "chess.js";
 import { ChessService } from "../chess/ChessService.js";
-import { emptySquareGlyph, legalMoveGlyph, pieceGlyph } from "../config/theme.js";
+import { legalMoveGlyph, pieceGlyph } from "../config/theme.js";
 import type { CliOptions } from "../types/AppOptions.js";
 import { FILES, type Square } from "../types/Square.js";
 import type { UiState } from "../types/UiState.js";
@@ -25,13 +25,18 @@ export type RenderedBoard = {
 };
 
 const BOARD_START_RELATIVE_X = 12;
-const SQUARE_WIDTH = 4;
-const SQUARE_HEIGHT = 1;
+const CELL_INNER_WIDTH = 5;
+const SQUARE_WIDTH = CELL_INNER_WIDTH + 1;
+const SQUARE_HEIGHT = 2;
+const GRID_SIZE = 8;
+const GRID_WIDTH = 1 + GRID_SIZE * SQUARE_WIDTH;
+const GRID_HEIGHT = 1 + GRID_SIZE * SQUARE_HEIGHT;
+export const BOARD_VISIBLE_WIDTH = BOARD_START_RELATIVE_X - 3 + 1 + 2 + GRID_WIDTH + 2 + 1;
 
-export function createBoardLayout(left: number, top: number, flipBoard: boolean): BoardLayout {
+export function createBoardLayout(left: number, top: number, flipBoard: boolean, gridTopOffset = 9): BoardLayout {
   return {
     startX: left + 1 + BOARD_START_RELATIVE_X,
-    startY: top + 9,
+    startY: top + gridTopOffset,
     squareWidth: SQUARE_WIDTH,
     squareHeight: SQUARE_HEIGHT,
     orientation: flipBoard ? "black" : "white"
@@ -39,8 +44,19 @@ export function createBoardLayout(left: number, top: number, flipBoard: boolean)
 }
 
 export function mouseToSquare(x: number, y: number, layout: BoardLayout): Square | null {
-  const fileIndex = Math.floor((x - layout.startX) / layout.squareWidth);
-  const rankIndex = Math.floor((y - layout.startY) / layout.squareHeight);
+  const localX = x - layout.startX;
+  const localY = y - layout.startY;
+
+  if (localX < 0 || localX > GRID_SIZE * layout.squareWidth || localY < 0 || localY > GRID_SIZE * layout.squareHeight) {
+    return null;
+  }
+
+  if (localX % layout.squareWidth === 0 || localY % layout.squareHeight === 0) {
+    return null;
+  }
+
+  const fileIndex = Math.floor((localX - 1) / layout.squareWidth);
+  const rankIndex = Math.floor((localY - 1) / layout.squareHeight);
 
   if (fileIndex < 0 || fileIndex > 7 || rankIndex < 0 || rankIndex > 7) {
     return null;
@@ -59,9 +75,12 @@ export class BoardRenderer {
     const lines = [
       { raw: "", visibleWidth: 0 },
       this.renderFileLabels(files),
-      ...ranks.map((rank) => this.renderRankLine(chess, state, options, rank, files)),
-      this.renderFileLabels(files),
-      { raw: "", visibleWidth: 0 }
+      this.renderHorizontalBorder("top", options.ascii),
+      ...ranks.flatMap((rank, index) => [
+        this.renderRankLine(chess, state, options, rank, files),
+        this.renderHorizontalBorder(index === ranks.length - 1 ? "bottom" : "middle", options.ascii)
+      ]),
+      this.renderFileLabels(files)
     ];
 
     return {
@@ -71,10 +90,31 @@ export class BoardRenderer {
   }
 
   private renderFileLabels(files: readonly string[]): { raw: string; visibleWidth: number } {
-    const raw = `${" ".repeat(BOARD_START_RELATIVE_X)}${files.map((file) => ` ${file}  `).join("")}`;
+    const raw = `${" ".repeat(BOARD_START_RELATIVE_X)} ${files.map((file) => `  ${file}   `).join("")}`;
     return {
       raw,
-      visibleWidth: BOARD_START_RELATIVE_X + files.length * SQUARE_WIDTH
+      visibleWidth: BOARD_START_RELATIVE_X + GRID_WIDTH
+    };
+  }
+
+  private renderHorizontalBorder(
+    position: "top" | "middle" | "bottom",
+    ascii: boolean
+  ): { raw: string; visibleWidth: number } {
+    const border = this.getGridCharacters(ascii);
+    const joints = {
+      top: [border.topLeft, border.topJoin, border.topRight],
+      middle: [border.leftJoin, border.centerJoin, border.rightJoin],
+      bottom: [border.bottomLeft, border.bottomJoin, border.bottomRight]
+    }[position];
+    const raw = `${" ".repeat(BOARD_START_RELATIVE_X)}${joints[0]}${Array.from({ length: GRID_SIZE }, (_value, index) => {
+      const right = index === GRID_SIZE - 1 ? joints[2] : joints[1];
+      return `${border.horizontal.repeat(CELL_INNER_WIDTH)}${right}`;
+    }).join("")}`;
+
+    return {
+      raw,
+      visibleWidth: BOARD_START_RELATIVE_X + GRID_WIDTH
     };
   }
 
@@ -85,16 +125,17 @@ export class BoardRenderer {
     rank: number,
     files: readonly string[]
   ): { raw: string; visibleWidth: number } {
+    const border = this.getGridCharacters(options.ascii);
     const cells = files.map((file) => {
       const square = `${file}${rank}` as Square;
       return this.renderSquare(chess, state, options, square);
     });
     const leftPadding = " ".repeat(BOARD_START_RELATIVE_X - 3);
-    const raw = `${leftPadding}${rank}  ${cells.join("")} ${rank}`;
+    const raw = `${leftPadding}${rank}  ${border.vertical}${cells.join(border.vertical)}${border.vertical}  ${rank}`;
 
     return {
       raw,
-      visibleWidth: BOARD_START_RELATIVE_X - 3 + 1 + 2 + cells.length * SQUARE_WIDTH + 2
+      visibleWidth: BOARD_VISIBLE_WIDTH
     };
   }
 
@@ -102,48 +143,41 @@ export class BoardRenderer {
     const piece = chess.getPiece(square);
     const legalMove = state.legalMoves.find((move) => move.to === square);
     const isSelected = state.selectedSquare === square;
-    const isLastMove = this.isLastMoveSquare(state.lastMove, square);
     const isCheckedKing = chess.getCheckedKingSquare() === square;
     const isCapture = Boolean(legalMove?.captured);
-    const glyph = piece ? pieceGlyph(piece, options.ascii) : emptySquareGlyph(options.ascii);
+    const glyph = piece ? pieceGlyph(piece, options.ascii) : "";
 
-    let cell = ` ${glyph}  `;
+    let cell = this.centerGlyph(glyph);
 
     if (legalMove && !piece) {
-      cell = ` ${legalMoveGlyph(options.ascii)}  `;
-    }
-
-    if (isLastMove && !piece && !legalMove) {
-      cell = " +  ";
+      cell = this.centerGlyph(legalMoveGlyph(options.ascii));
     }
 
     if (isCapture && piece) {
-      cell = `x${glyph}x `;
+      cell = ` x${glyph}x `;
     }
 
     if (isSelected && piece) {
-      cell = `[${glyph}] `;
+      cell = ` [${glyph}] `;
     }
 
     if (isCheckedKing && piece) {
-      cell = `!${glyph}! `;
+      cell = ` !${glyph}! `;
     }
 
-    return applyStyle(cell, this.getSquareStyle({ isCheckedKing, isSelected, isCapture, legalMove, isLastMove }), options.color);
+    return applyStyle(cell, this.getSquareStyle({ isCheckedKing, isSelected, isCapture, legalMove }), options.color);
   }
 
   private getSquareStyle({
     isCheckedKing,
     isSelected,
     isCapture,
-    legalMove,
-    isLastMove
+    legalMove
   }: {
     isCheckedKing: boolean;
     isSelected: boolean;
     isCapture: boolean;
     legalMove: Move | undefined;
-    isLastMove: boolean;
   }): string[] {
     if (isCheckedKing) {
       return [ansi.bgRed, ansi.fgWhite, ansi.bold];
@@ -164,6 +198,14 @@ export class BoardRenderer {
     return [];
   }
 
+  private centerGlyph(glyph: string): string {
+    if (!glyph) {
+      return " ".repeat(CELL_INNER_WIDTH);
+    }
+
+    return `  ${glyph}  `;
+  }
+
   private getDisplayFiles(flipBoard: boolean): readonly string[] {
     return flipBoard ? [...FILES].reverse() : FILES;
   }
@@ -172,7 +214,47 @@ export class BoardRenderer {
     return flipBoard ? [1, 2, 3, 4, 5, 6, 7, 8] : [8, 7, 6, 5, 4, 3, 2, 1];
   }
 
-  private isLastMoveSquare(lastMove: Move | null, square: Square): boolean {
-    return Boolean(lastMove && (lastMove.from === square || lastMove.to === square));
+  private getGridCharacters(ascii: boolean): {
+    horizontal: string;
+    vertical: string;
+    topLeft: string;
+    topJoin: string;
+    topRight: string;
+    leftJoin: string;
+    centerJoin: string;
+    rightJoin: string;
+    bottomLeft: string;
+    bottomJoin: string;
+    bottomRight: string;
+  } {
+    if (ascii) {
+      return {
+        horizontal: "-",
+        vertical: "|",
+        topLeft: "+",
+        topJoin: "+",
+        topRight: "+",
+        leftJoin: "+",
+        centerJoin: "+",
+        rightJoin: "+",
+        bottomLeft: "+",
+        bottomJoin: "+",
+        bottomRight: "+"
+      };
+    }
+
+    return {
+      horizontal: "─",
+      vertical: "│",
+      topLeft: "┌",
+      topJoin: "┬",
+      topRight: "┐",
+      leftJoin: "├",
+      centerJoin: "┼",
+      rightJoin: "┤",
+      bottomLeft: "└",
+      bottomJoin: "┴",
+      bottomRight: "┘"
+    };
   }
 }
