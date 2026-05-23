@@ -26,4 +26,14 @@ describe("LayoutRenderer styled output", () => {
     expect(rendered.output).toContain(ansi.bgGreen);
     expect(rendered.output).not.toContain("…");
   });
+
+  it("does not color the last played move blue", () => {
+    const chess = new ChessService();
+    const state = createInitialUiState();
+    state.lastMove = chess.makeMove("e2" as Square, "e4" as Square);
+
+    const rendered = new LayoutRenderer().render(chess, state, options);
+
+    expect(rendered.output).not.toContain(ansi.bgBlue);
+  });
 });

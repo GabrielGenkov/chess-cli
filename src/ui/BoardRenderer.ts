@@ -161,10 +161,6 @@ export class BoardRenderer {
       return [ansi.bgGreen, ansi.fgBlack];
     }
 
-    if (isLastMove) {
-      return [ansi.bgBlue, ansi.fgWhite];
-    }
-
     return [];
   }
 
