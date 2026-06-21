@@ -2,29 +2,36 @@ import { ChessService } from "../chess/ChessService.js";
 import { formatMove } from "../chess/MoveService.js";
 import type { UiState } from "../types/UiState.js";
 
+// Produces plain, semantic status strings. Theming/coloring is applied by the
+// layout so these stay trivially testable.
 export class StatusRenderer {
-  renderTurn(chess: ChessService): string {
-    return `Turn: ${chess.getTurnLabel()}`;
+  turn(chess: ChessService): "White" | "Black" {
+    return chess.getTurnLabel();
   }
 
-  renderStatus(chess: ChessService): string {
-    return `Status: ${chess.getStatusLabel()}`;
+  status(chess: ChessService): string {
+    return chess.getStatusLabel();
   }
 
-  renderMessage(state: UiState): string {
-    if (state.pendingPromotion) {
-      return "Promote to: [q] Queen, [r] Rook, [b] Bishop, [n] Knight";
+  lastMove(state: UiState): string {
+    return formatMove(state.lastMove);
+  }
+
+  material(chess: ChessService): string | null {
+    const balance = chess.getMaterialBalance();
+
+    if (balance === 0) {
+      return null;
     }
 
-    return `Message: ${state.message ?? "Ready"}`;
+    return balance > 0 ? `White +${balance}` : `Black +${-balance}`;
   }
 
-  renderLastMove(state: UiState): string {
-    return `Last move: ${formatMove(state.lastMove)}`;
-  }
+  message(state: UiState): string {
+    if (state.pendingPromotion) {
+      return "Promote: q r b n";
+    }
 
-  renderInput(state: UiState): string {
-    const value = state.inputBuffer ? state.inputBuffer : "-";
-    return `Input: ${value}`;
+    return state.message ?? "Ready";
   }
 }

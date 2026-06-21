@@ -1,15 +1,27 @@
 import { ChessService } from "../chess/ChessService.js";
-import { formatMove } from "../chess/MoveService.js";
+import { resolveTheme, type Theme } from "../config/theme.js";
 import type { CliOptions } from "../types/AppOptions.js";
 import type { UiState } from "../types/UiState.js";
-import { ansi, applyStyle, truncateText } from "./ansi.js";
+import { ansi } from "./ansi.js";
 import {
-  BOARD_VISIBLE_WIDTH,
   BoardRenderer,
   createBoardLayout,
+  widgetHeight,
+  widgetWidth,
+  type BoardGeometry,
   type BoardLayout
 } from "./BoardRenderer.js";
+import type { ColorDepth } from "./color.js";
 import { HelpModal } from "./HelpModal.js";
+import {
+  blankLine,
+  fillRun,
+  joinHorizontal,
+  padRight,
+  styled,
+  type RenderedLine
+} from "./lines.js";
+import { PANEL_WIDTH, SidePanel } from "./SidePanel.js";
 import { StatusRenderer } from "./StatusRenderer.js";
 
 export type RenderResult = {
@@ -17,248 +29,253 @@ export type RenderResult = {
   boardLayout: BoardLayout | null;
 };
 
-const FULL_WIDTH = 80;
-const FULL_HEIGHT = 32;
-const SIDE_WIDTH = 100;
-const SHORT_HEIGHT = 24;
-const COMPACT_WIDTH = BOARD_VISIBLE_WIDTH + 2;
-const COMPACT_BOARD_GRID_TOP_OFFSET = 5;
+const GAP = 2;
+const FULL_CHROME = 5; // header(2) + gap(1) + footer(2)
+const BOARD_CHROME = 3; // header(1) + footer(2)
+// A 3-row-tall board only fits comfortably in a tall terminal; otherwise we use
+// a compact 1-row board. Both heights are odd so pieces stay vertically centered.
+const TALL_ROWS = 34;
 
 export class LayoutRenderer {
   private readonly boardRenderer = new BoardRenderer();
-  private readonly statusRenderer = new StatusRenderer();
+  private readonly sidePanel = new SidePanel();
   private readonly helpModal = new HelpModal();
+  private readonly status = new StatusRenderer();
 
   render(chess: ChessService, state: UiState, options: CliOptions): RenderResult {
     const columns = process.stdout.columns ?? 80;
     const rows = process.stdout.rows ?? 24;
+    const theme = resolveTheme(options.theme);
+    const depth = options.colorDepth;
 
-    if (columns >= FULL_WIDTH && rows >= FULL_HEIGHT) {
-      return this.renderFullLayout(chess, state, options, columns);
+    // Even tile width centers glyphs the terminal draws ~2 cells wide (the glyph
+    // sits at column 1 and its drawing is centered in the 4-wide square); odd
+    // width dead-centers a true 1-cell glyph. Pick per terminal.
+    const evenTiles = options.pieceWidth === 2 || options.wideTiles;
+    const geometry: BoardGeometry = {
+      pieceWidth: options.pieceWidth,
+      tileWidth: evenTiles ? 4 : 5,
+      tileHeight: rows >= TALL_ROWS ? 3 : 1
+    };
+
+    const widgetW = widgetWidth(geometry);
+    const widgetH = widgetHeight(geometry);
+    const fullBlockWidth = widgetW + GAP + PANEL_WIDTH;
+
+    if (columns >= fullBlockWidth && rows >= widgetH + FULL_CHROME) {
+      return this.composeFull(chess, state, options, theme, depth, geometry, columns, rows);
     }
 
-    if (columns >= SIDE_WIDTH && rows >= SHORT_HEIGHT) {
-      return this.renderSideLayout(chess, state, options, columns);
+    if (columns >= widgetW && rows >= widgetH + BOARD_CHROME) {
+      return this.composeBoardOnly(chess, state, options, theme, depth, geometry, columns, rows);
     }
 
-    if (columns >= COMPACT_WIDTH && rows >= SHORT_HEIGHT) {
-      return this.renderCompactLayout(chess, state, options, columns);
-    }
+    const compact: BoardGeometry = { ...geometry, tileHeight: 1 };
+    const minCols = widgetWidth(compact);
+    const minRows = widgetHeight(compact) + BOARD_CHROME;
 
     return {
-      output: `${ansi.clear}${ansi.showCursor}Terminal too small. Minimum size: ${COMPACT_WIDTH}x${SHORT_HEIGHT}.\n`,
+      output: `${ansi.clear}${ansi.showCursor}Terminal too small. Minimum size: ${minCols}x${minRows}.\n`,
       boardLayout: null
     };
   }
 
-  private renderFullLayout(chess: ChessService, state: UiState, options: CliOptions, columns: number): RenderResult {
-    const width = FULL_WIDTH;
-    const innerWidth = width - 2;
-    const left = Math.max(1, Math.floor((columns - width) / 2) + 1);
-    const top = 1;
-    const boardLayout = createBoardLayout(left, top, options.flipBoard);
-    const box = this.getBox(options.ascii);
-    const prefix = " ".repeat(left - 1);
-    const lines: string[] = [];
-    const pushRule = (leftChar: string, rightChar: string) => {
-      lines.push(`${prefix}${leftChar}${box.h.repeat(innerWidth)}${rightChar}`);
-    };
-    const pushContent = (raw: string, visibleWidth = raw.length) => {
-      lines.push(this.renderBoxContent(prefix, box.v, raw, visibleWidth, innerWidth));
-    };
-
-    const title = applyStyle("Terminal Chess", [ansi.bold, ansi.fgCyan], options.color);
-    pushRule(box.tl, box.tr);
-    pushContent(title, "Terminal Chess".length);
-    pushRule(box.lt, box.rt);
-    pushContent(this.statusRenderer.renderTurn(chess));
-    pushContent(this.statusRenderer.renderStatus(chess));
-    pushContent(this.statusRenderer.renderMessage(state));
-    pushRule(box.lt, box.rt);
-
-    const contentLines = state.showHelp
-      ? this.helpModal.render()
-      : this.boardRenderer.render(chess, state, options, boardLayout).lines;
-
-    for (const line of contentLines) {
-      pushContent(line.raw, line.visibleWidth);
-    }
-
-    pushRule(box.lt, box.rt);
-    pushContent(this.statusRenderer.renderLastMove(state));
-    pushContent(this.statusRenderer.renderInput(state));
-    pushContent("Commands: q quit | r restart | u undo | ? help | Esc clear");
-    pushRule(box.bl, box.br);
-
-    return {
-      output: `${ansi.clear}${ansi.hideCursor}${lines.join("\n")}`,
-      boardLayout: state.showHelp ? null : boardLayout
-    };
-  }
-
-  private renderSideLayout(chess: ChessService, state: UiState, options: CliOptions, columns: number): RenderResult {
-    const width = SIDE_WIDTH;
-    const innerWidth = width - 2;
-    const sideWidth = innerWidth - BOARD_VISIBLE_WIDTH - 2;
-    const left = Math.max(1, Math.floor((columns - width) / 2) + 1);
-    const top = 1;
-    const boardLayout = createBoardLayout(left, top, options.flipBoard, COMPACT_BOARD_GRID_TOP_OFFSET);
-    const box = this.getBox(options.ascii);
-    const prefix = " ".repeat(left - 1);
-    const title = applyStyle("Terminal Chess", [ansi.bold, ansi.fgCyan], options.color);
-    const boardLines = state.showHelp
-      ? this.padRenderableLines(this.helpModal.render(), 20)
-      : this.padRenderableLines(this.boardRenderer.render(chess, state, options, boardLayout).lines, 20);
-    const sideLines = this.renderSidePanel(chess, state);
-    const lines = [
-      `${prefix}${box.tl}${box.h.repeat(innerWidth)}${box.tr}`,
-      this.renderBoxContent(prefix, box.v, title, "Terminal Chess".length, innerWidth),
-      `${prefix}${box.lt}${box.h.repeat(innerWidth)}${box.rt}`
-    ];
-
-    for (let index = 0; index < 20; index += 1) {
-      const boardLine = boardLines[index];
-      const sideText = this.fitPlainText(sideLines[index] ?? "", sideWidth);
-      const raw = `${boardLine.raw}${" ".repeat(Math.max(0, BOARD_VISIBLE_WIDTH - boardLine.visibleWidth))}  ${sideText}`;
-      lines.push(this.renderBoxContent(prefix, box.v, raw, BOARD_VISIBLE_WIDTH + 2 + sideText.length, innerWidth));
-    }
-
-    lines.push(`${prefix}${box.bl}${box.h.repeat(innerWidth)}${box.br}`);
-
-    return {
-      output: `${ansi.clear}${ansi.hideCursor}${lines.join("\n")}`,
-      boardLayout: state.showHelp ? null : boardLayout
-    };
-  }
-
-  private renderCompactLayout(chess: ChessService, state: UiState, options: CliOptions, columns: number): RenderResult {
-    const width = Math.min(FULL_WIDTH, Math.max(COMPACT_WIDTH, columns));
-    const innerWidth = width - 2;
-    const left = Math.max(1, Math.floor((columns - width) / 2) + 1);
-    const top = 1;
-    const boardLayout = createBoardLayout(left, top, options.flipBoard, COMPACT_BOARD_GRID_TOP_OFFSET);
-    const box = this.getBox(options.ascii);
-    const prefix = " ".repeat(left - 1);
-    const title = this.getCompactTitle(chess, state, options, innerWidth);
-    const contentLines = state.showHelp
-      ? this.padRenderableLines(this.helpModal.render(), 20)
-      : this.padRenderableLines(this.boardRenderer.render(chess, state, options, boardLayout).lines, 20);
-    const lines = [
-      `${prefix}${box.tl}${box.h.repeat(innerWidth)}${box.tr}`,
-      this.renderBoxContent(prefix, box.v, title.raw, title.visibleWidth, innerWidth),
-      `${prefix}${box.lt}${box.h.repeat(innerWidth)}${box.rt}`
-    ];
-
-    for (const line of contentLines) {
-      lines.push(this.renderBoxContent(prefix, box.v, line.raw, line.visibleWidth, innerWidth));
-    }
-
-    lines.push(`${prefix}${box.bl}${box.h.repeat(innerWidth)}${box.br}`);
-
-    return {
-      output: `${ansi.clear}${ansi.hideCursor}${lines.join("\n")}`,
-      boardLayout: state.showHelp ? null : boardLayout
-    };
-  }
-
-  private renderSidePanel(chess: ChessService, state: UiState): string[] {
-    const message = state.pendingPromotion
-      ? "Promote: q/r/b/n"
-      : `Msg: ${state.message ?? "Ready"}`;
-
-    return [
-      "Info",
-      "",
-      this.statusRenderer.renderTurn(chess),
-      this.statusRenderer.renderStatus(chess),
-      message,
-      "",
-      this.statusRenderer.renderLastMove(state),
-      this.statusRenderer.renderInput(state),
-      "",
-      "Commands",
-      "q quit",
-      "r restart",
-      "u undo",
-      "? or h help",
-      "Esc clear",
-      "",
-      "Mouse",
-      "Click piece",
-      "then target",
-      "Borders ignored"
-    ];
-  }
-
-  private getCompactTitle(
+  private composeFull(
     chess: ChessService,
     state: UiState,
     options: CliOptions,
-    innerWidth: number
-  ): { raw: string; visibleWidth: number } {
-    const appTitle = "Terminal Chess";
-    const message = state.pendingPromotion
-      ? "Promote q/r/b/n"
-      : state.message ?? "Ready";
-    const suffix = ` | ${chess.getTurnLabel()} | ${chess.getStatusLabel()} | ${message} | Last: ${formatMove(state.lastMove)}`;
-    const suffixWidth = Math.max(0, innerWidth - appTitle.length);
-    const visibleSuffix = this.fitPlainText(suffix, suffixWidth);
+    theme: Theme,
+    depth: ColorDepth,
+    geometry: BoardGeometry,
+    columns: number,
+    rows: number
+  ): RenderResult {
+    const widgetW = widgetWidth(geometry);
+    const widgetH = widgetHeight(geometry);
+    const blockWidth = widgetW + GAP + PANEL_WIDTH;
+    const header = this.header(theme, depth, options, chess, blockWidth);
+    const footer = this.footer(theme, depth, state, blockWidth);
 
-    return {
-      raw: `${applyStyle(appTitle, [ansi.bold, ansi.fgCyan], options.color)}${visibleSuffix}`,
-      visibleWidth: appTitle.length + visibleSuffix.length
-    };
-  }
+    let body: RenderedLine[];
+    let withBoard = false;
 
-  private padRenderableLines(
-    lines: Array<{ raw: string; visibleWidth: number }>,
-    count: number
-  ): Array<{ raw: string; visibleWidth: number }> {
-    return Array.from({ length: count }, (_value, index) => lines[index] ?? { raw: "", visibleWidth: 0 });
-  }
-
-  private renderBoxContent(prefix: string, vertical: string, raw: string, visibleWidth: number, innerWidth: number): string {
-    const truncated = visibleWidth > innerWidth ? truncateText(raw, innerWidth) : raw;
-    const truncatedVisibleWidth = Math.min(visibleWidth, innerWidth);
-    return `${prefix}${vertical}${truncated}${" ".repeat(Math.max(0, innerWidth - truncatedVisibleWidth))}${vertical}`;
-  }
-
-  private fitPlainText(text: string, width: number): string {
-    return text.length > width ? truncateText(text, width) : text;
-  }
-
-  private getBox(ascii: boolean): {
-    tl: string;
-    tr: string;
-    bl: string;
-    br: string;
-    h: string;
-    v: string;
-    lt: string;
-    rt: string;
-  } {
-    if (ascii) {
-      return {
-        tl: "+",
-        tr: "+",
-        bl: "+",
-        br: "+",
-        h: "-",
-        v: "|",
-        lt: "+",
-        rt: "+"
-      };
+    if (state.showHelp) {
+      body = this.helpBody(theme, depth, blockWidth, widgetH);
+    } else {
+      const boardLines = this.boardLines(chess, state, options, geometry);
+      const panelLines = this.sidePanel.render(chess, state, options, widgetH);
+      body = boardLines.map((line, index) =>
+        joinHorizontal(line, panelLines[index] ?? blankLine(PANEL_WIDTH, theme.panelBg, depth), GAP, theme.outerBg, depth)
+      );
+      withBoard = true;
     }
 
+    const content = [...header, ...body, blankLine(blockWidth, theme.outerBg, depth), ...footer];
+    const screen = this.assemble(content, blockWidth, columns, rows, theme, depth);
+    const boardLayout = withBoard
+      ? createBoardLayout(screen.left + 1, screen.top + header.length + 1, options.flipBoard, geometry)
+      : null;
+
+    return { output: screen.output, boardLayout };
+  }
+
+  private composeBoardOnly(
+    chess: ChessService,
+    state: UiState,
+    options: CliOptions,
+    theme: Theme,
+    depth: ColorDepth,
+    geometry: BoardGeometry,
+    columns: number,
+    rows: number
+  ): RenderResult {
+    const blockWidth = widgetWidth(geometry);
+    const widgetH = widgetHeight(geometry);
+    const header = [this.headerLine(theme, depth, options, chess, blockWidth)];
+    const footer = this.footer(theme, depth, state, blockWidth);
+
+    let body: RenderedLine[];
+    let withBoard = false;
+
+    if (state.showHelp) {
+      body = this.helpBody(theme, depth, blockWidth, widgetH);
+    } else {
+      body = this.boardLines(chess, state, options, geometry);
+      withBoard = true;
+    }
+
+    const content = [...header, ...body, ...footer];
+    const screen = this.assemble(content, blockWidth, columns, rows, theme, depth);
+    const boardLayout = withBoard
+      ? createBoardLayout(screen.left + 1, screen.top + header.length + 1, options.flipBoard, geometry)
+      : null;
+
+    return { output: screen.output, boardLayout };
+  }
+
+  private boardLines(
+    chess: ChessService,
+    state: UiState,
+    options: CliOptions,
+    geometry: BoardGeometry
+  ): RenderedLine[] {
+    return this.boardRenderer.render(chess, state, options, geometry).lines;
+  }
+
+  private helpBody(theme: Theme, depth: ColorDepth, blockWidth: number, height: number): RenderedLine[] {
+    const help = this.helpModal.render(theme, depth, blockWidth);
+    const lines = help.slice(0, height);
+
+    while (lines.length < height) {
+      lines.push(blankLine(blockWidth, theme.panelBg, depth));
+    }
+
+    return lines.map((line) => padRight(line, blockWidth, theme.panelBg, depth));
+  }
+
+  private header(
+    theme: Theme,
+    depth: ColorDepth,
+    options: CliOptions,
+    chess: ChessService,
+    blockWidth: number
+  ): RenderedLine[] {
+    return [this.headerLine(theme, depth, options, chess, blockWidth), blankLine(blockWidth, theme.outerBg, depth)];
+  }
+
+  private headerLine(
+    theme: Theme,
+    depth: ColorDepth,
+    options: CliOptions,
+    chess: ChessService,
+    blockWidth: number
+  ): RenderedLine {
+    const crown = options.ascii ? "" : "♚ ";
+    const title = `${crown}Terminal Chess`;
+    const themeTag = ` · ${theme.label}`;
+    const statusText = chess.getStatusLabel();
+    const right = statusText === "Normal" ? `${this.status.turn(chess)} to move` : statusText;
+
+    const leftWidth = title.length + themeTag.length;
+    const rightWidth = right.length;
+    const spacer = Math.max(1, blockWidth - leftWidth - rightWidth - 2);
+
+    const raw =
+      styled(` ${title}`, { bg: theme.outerBg, fg: theme.title, bold: true }, depth) +
+      styled(themeTag, { bg: theme.outerBg, fg: theme.textDim }, depth) +
+      fillRun(spacer, theme.outerBg, depth) +
+      styled(`${right} `, { bg: theme.outerBg, fg: theme.coordLabel }, depth);
+
+    return padRight({ raw, visibleWidth: 1 + leftWidth + spacer + rightWidth + 1 }, blockWidth, theme.outerBg, depth);
+  }
+
+  private footer(theme: Theme, depth: ColorDepth, state: UiState, blockWidth: number): RenderedLine[] {
+    const message = this.status.message(state);
+    const input = state.inputBuffer ? `input ${state.inputBuffer}` : "";
+    const left = ` ${message}`;
+    const spacer = Math.max(1, blockWidth - left.length - input.length - 2);
+    const messageLine: RenderedLine = padRight(
+      {
+        raw:
+          styled(left, { bg: theme.outerBg, fg: theme.text }, depth) +
+          fillRun(spacer, theme.outerBg, depth) +
+          styled(`${input} `, { bg: theme.outerBg, fg: theme.coordLabel }, depth),
+        visibleWidth: left.length + spacer + input.length + 1
+      },
+      blockWidth,
+      theme.outerBg,
+      depth
+    );
+
+    const commands = " q quit   r restart   u undo   ? help   Esc clear";
+    const commandsLine: RenderedLine = padRight(
+      { raw: styled(commands, { bg: theme.outerBg, fg: theme.textDim }, depth), visibleWidth: commands.length },
+      blockWidth,
+      theme.outerBg,
+      depth
+    );
+
+    return [messageLine, commandsLine];
+  }
+
+  // Center the content block on screen and (for color tiers) paint the whole
+  // terminal in the theme background so the app reads as a window, not a prompt.
+  private assemble(
+    content: RenderedLine[],
+    blockWidth: number,
+    columns: number,
+    rows: number,
+    theme: Theme,
+    depth: ColorDepth
+  ): { output: string; left: number; top: number } {
+    const left = Math.max(0, Math.floor((columns - blockWidth) / 2));
+    const top = Math.max(0, Math.floor((rows - content.length) / 2));
+    const fill = depth !== "none";
+    const screenLines: string[] = [];
+
+    const blankScreenLine = (): string => (fill ? fillRun(columns, theme.outerBg, depth) : "");
+
+    for (let index = 0; index < top; index += 1) {
+      screenLines.push(blankScreenLine());
+    }
+
+    for (const line of content) {
+      const leftPad = fill ? fillRun(left, theme.outerBg, depth) : " ".repeat(left);
+      const usedRight = left + line.visibleWidth;
+      const rightPad = fill ? fillRun(Math.max(0, columns - usedRight), theme.outerBg, depth) : "";
+      screenLines.push(`${leftPad}${line.raw}${rightPad}`);
+    }
+
+    while (fill && screenLines.length < rows) {
+      screenLines.push(blankScreenLine());
+    }
+
+    const trimmed = screenLines.slice(0, rows);
+
     return {
-      tl: "┌",
-      tr: "┐",
-      bl: "└",
-      br: "┘",
-      h: "─",
-      v: "│",
-      lt: "├",
-      rt: "┤"
+      output: `${ansi.clear}${ansi.hideCursor}${trimmed.join("\n")}`,
+      left,
+      top
     };
   }
 }

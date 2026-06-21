@@ -1,89 +1,101 @@
 import { describe, expect, it } from "vitest";
 import { ChessService } from "../src/chess/ChessService.js";
+import { THEMES } from "../src/config/theme.js";
 import type { CliOptions } from "../src/types/AppOptions.js";
 import type { Square } from "../src/types/Square.js";
 import { createInitialUiState } from "../src/types/UiState.js";
-import { BoardRenderer, createBoardLayout } from "../src/ui/BoardRenderer.js";
+import { BoardRenderer, DEFAULT_GEOMETRY, type BoardGeometry } from "../src/ui/BoardRenderer.js";
+import { hexToRgb, sgr } from "../src/ui/color.js";
 
-const options: CliOptions = {
-  ascii: true,
-  color: false,
+function fgCode(hex: string): string {
+  const { r, g, b } = hexToRgb(hex);
+  return `38;2;${r};${g};${b}`;
+}
+
+const baseOptions: CliOptions = {
+  ascii: false,
+  colorDepth: "truecolor",
   mouse: true,
-  flipBoard: false
+  flipBoard: false,
+  theme: "walnut",
+  pieceWidth: 1,
+  detectPieceWidth: false,
+  wideTiles: false
 };
 
-const gridStart = 12;
-const cellWidth = 6;
-const cellInnerWidth = 5;
-const files = "abcdefgh";
-
-function getRankLine(renderedLines: Array<{ raw: string }>, rank: number): string {
-  const line = renderedLines.find((candidate) => candidate.raw.trimStart().startsWith(`${rank}  |`));
-
-  if (!line) {
-    throw new Error(`Rank ${rank} was not rendered`);
-  }
-
-  return line.raw;
+function renderText(
+  chess: ChessService,
+  state = createInitialUiState(),
+  options = baseOptions,
+  geometry: BoardGeometry = DEFAULT_GEOMETRY
+): string {
+  const rendered = new BoardRenderer().render(chess, state, options, geometry);
+  return rendered.lines.map((line) => line.raw).join("\n");
 }
 
-function getCell(rankLine: string, square: Square): string {
-  const fileIndex = files.indexOf(square[0]);
-  const start = gridStart + 1 + fileIndex * cellWidth;
-  return rankLine.slice(start, start + cellInnerWidth);
-}
+describe("BoardRenderer", () => {
+  it("paints a solid-tile checkerboard with no inner grid lines", () => {
+    const text = renderText(new ChessService());
 
-describe("BoardRenderer visual cells", () => {
-  it("renders a larger boxed ASCII board with blank empty squares", () => {
-    const chess = new ChessService();
-    const state = createInitialUiState();
-
-    const rendered = new BoardRenderer().render(chess, state, options, createBoardLayout(1, 1, false));
-
-    expect(rendered.lines.some((line) => line.raw.includes("+-----+-----+-----+-----+-----+-----+-----+-----+"))).toBe(true);
-    expect(rendered.lines[1].raw).toContain("  a   ");
-    expect(getCell(getRankLine(rendered.lines, 4), "d4" as Square)).toBe("     ");
+    expect(text).toContain(sgr({ bg: THEMES.walnut.lightSquare }, "truecolor"));
+    expect(text).toContain(sgr({ bg: THEMES.walnut.darkSquare }, "truecolor"));
+    // The old design drew box-drawing grid joints between squares — gone now.
+    expect(text).not.toContain("┼");
+    expect(text).not.toContain("┬");
   });
 
-  it("renders a Unicode boxed board by default", () => {
-    const chess = new ChessService();
-    const state = createInitialUiState();
-    const unicodeOptions = {
-      ...options,
-      ascii: false
-    };
+  it("draws a rounded frame and coordinate labels", () => {
+    const text = renderText(new ChessService());
 
-    const rendered = new BoardRenderer().render(chess, state, unicodeOptions, createBoardLayout(1, 1, false));
-
-    expect(rendered.lines.some((line) => line.raw.includes("┌─────┬─────"))).toBe(true);
+    expect(text).toContain("╭");
+    expect(text).toContain("╰");
+    expect(text).toContain(sgr({ bg: THEMES.walnut.outerBg, fg: THEMES.walnut.coordLabel }, "truecolor"));
   });
 
-  it("renders selected pawn highlights on the expected destination cells", () => {
+  it("highlights the selected square and legal destinations", () => {
     const chess = new ChessService();
     const state = createInitialUiState();
     state.selectedSquare = "e2" as Square;
     state.legalMoves = chess.getLegalMoves("e2" as Square);
 
-    const rendered = new BoardRenderer().render(chess, state, options, createBoardLayout(1, 1, false));
+    const text = renderText(chess, state);
 
-    expect(getCell(getRankLine(rendered.lines, 2), "e2" as Square)).toBe(" [P] ");
-    expect(getCell(getRankLine(rendered.lines, 3), "e3" as Square)).toBe("  *  ");
-    expect(getCell(getRankLine(rendered.lines, 4), "e4" as Square)).toBe("  *  ");
-    expect(getCell(getRankLine(rendered.lines, 4), "d4" as Square)).toBe("     ");
+    expect(text).toContain(sgr({ bg: THEMES.walnut.selectedBg }, "truecolor"));
+    expect(text).toContain("●");
   });
 
-  it("renders knight highlights only on legal destination cells", () => {
+  it("marks captures with the capture color", () => {
+    // White bishop on c4 can capture a pawn on f7 after a quick opening.
+    const chess = new ChessService("rnbqkbnr/pppp1ppp/8/4p3/2B1P3/8/PPPP1PPP/RNBQK1NR w KQkq - 0 1");
+    const state = createInitialUiState();
+    state.selectedSquare = "c4" as Square;
+    state.legalMoves = chess.getLegalMoves("c4" as Square);
+
+    const text = renderText(chess, state);
+
+    expect(state.legalMoves.some((move) => move.to === "f7" && move.captured)).toBe(true);
+    expect(text).toContain(fgCode(THEMES.walnut.capture));
+  });
+
+  it("renders ASCII pieces when asked", () => {
+    const text = renderText(new ChessService(), createInitialUiState(), { ...baseOptions, ascii: true });
+
+    expect(text).toContain("R");
+    expect(text).toContain("r");
+    expect(text).toContain("K");
+  });
+
+  it("falls back to glyph markers and texture with no color", () => {
     const chess = new ChessService();
     const state = createInitialUiState();
-    state.selectedSquare = "b1" as Square;
-    state.legalMoves = chess.getLegalMoves("b1" as Square);
+    state.selectedSquare = "e2" as Square;
+    state.legalMoves = chess.getLegalMoves("e2" as Square);
 
-    const rendered = new BoardRenderer().render(chess, state, options, createBoardLayout(1, 1, false));
-    const rank3 = getRankLine(rendered.lines, 3);
+    const text = renderText(chess, state, { ...baseOptions, ascii: true, colorDepth: "none" });
 
-    expect(getCell(getRankLine(rendered.lines, 1), "b1" as Square)).toBe(" [N] ");
-    expect(getCell(rank3, "a3" as Square)).toBe("  *  ");
-    expect(getCell(rank3, "c3" as Square)).toBe("  *  ");
-    expect(getCell(rank3, "b3" as Square)).toBe("     ");
+    expect(text).not.toContain("\x1b[");
+    expect(text).toContain("[P]");
+    expect(text).toContain("*");
+    expect(text).toContain(":"); // dark-square texture
   });
 });

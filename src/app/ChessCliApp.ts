@@ -2,6 +2,7 @@ import { ChessService } from "../chess/ChessService.js";
 import type { CliOptions } from "../types/AppOptions.js";
 import { ansi } from "../ui/ansi.js";
 import { mouseToSquare } from "../ui/BoardRenderer.js";
+import { measureGlyphWidth } from "../ui/glyphWidth.js";
 import { GameController } from "./GameController.js";
 import { InputController } from "./InputController.js";
 import { RenderController } from "./RenderController.js";
@@ -31,9 +32,18 @@ export class ChessCliApp {
     );
   }
 
-  start(): void {
+  async start(): Promise<void> {
     this.installGuards();
     process.stdout.write(`${ansi.enterAltScreen}${ansi.hideCursor}`);
+
+    if (this.options.detectPieceWidth && !this.stopped) {
+      this.options.pieceWidth = await measureGlyphWidth();
+    }
+
+    if (this.stopped) {
+      return;
+    }
+
     this.input.start();
     this.renderer.render();
   }

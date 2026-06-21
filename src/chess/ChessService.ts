@@ -4,6 +4,18 @@ import { FILES, type Square } from "../types/Square.js";
 
 export type BoardPiece = NonNullable<ReturnType<Chess["get"]>>;
 
+export type PieceType = BoardPiece["type"];
+
+export type CapturedPieces = {
+  // Pieces each side has captured, ordered by value (queen first).
+  white: PieceType[];
+  black: PieceType[];
+};
+
+const STARTING_COUNT: Record<PieceType, number> = { p: 8, n: 2, b: 2, r: 2, q: 1, k: 1 };
+const PIECE_VALUE: Record<PieceType, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+const CAPTURE_ORDER: PieceType[] = ["q", "r", "b", "n", "p"];
+
 export class ChessService {
   private chess: Chess;
 
@@ -110,6 +122,54 @@ export class ChessService {
 
   isGameOver(): boolean {
     return this.chess.isGameOver();
+  }
+
+  // Pieces removed from the board, attributed to the side that captured them.
+  getCapturedPieces(): CapturedPieces {
+    const remaining: Record<Color, Record<PieceType, number>> = {
+      w: { p: 0, n: 0, b: 0, r: 0, q: 0, k: 0 },
+      b: { p: 0, n: 0, b: 0, r: 0, q: 0, k: 0 }
+    };
+
+    for (const row of this.getBoard()) {
+      for (const piece of row) {
+        if (piece) {
+          remaining[piece.color][piece.type] += 1;
+        }
+      }
+    }
+
+    const missing = (color: Color): PieceType[] => {
+      const result: PieceType[] = [];
+
+      for (const type of CAPTURE_ORDER) {
+        const lost = STARTING_COUNT[type] - remaining[color][type];
+
+        for (let index = 0; index < lost; index += 1) {
+          result.push(type);
+        }
+      }
+
+      return result;
+    };
+
+    // White's tray shows the black pieces it removed, and vice versa.
+    return { white: missing("b"), black: missing("w") };
+  }
+
+  // Positive favours White, negative favours Black.
+  getMaterialBalance(): number {
+    let balance = 0;
+
+    for (const row of this.getBoard()) {
+      for (const piece of row) {
+        if (piece) {
+          balance += piece.color === "w" ? PIECE_VALUE[piece.type] : -PIECE_VALUE[piece.type];
+        }
+      }
+    }
+
+    return balance;
   }
 
   getCheckedKingSquare(): Square | null {
